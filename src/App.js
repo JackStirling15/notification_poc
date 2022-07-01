@@ -1,90 +1,58 @@
-import React, {useEffect, useState} from 'react';
-import {Client, Stomp} from '@stomp/stompjs';
+import React, {useState} from 'react';
+import {Stomp} from '@stomp/stompjs';
 
-
-// docs http://localhost:8081/user-manual/non-destructive-queues.html
-// console http://localhost:8081/console/auth/login
-
-// client http://localhost:3000/
-// client docs https://stomp-js.github.io/stomp-websocket/codo/extra/docs-src/Usage.md.html
 
 function App(){
   const [clientState, setClient] = useState(null);
   const [msg, setMsg] = useState("No Messages received yet");
-  const [motdSub, setMotdSub] = useState(null);
-  const [lastMsg, setLastMsg] = useState(null);
-
-  useEffect(()=>{
-  },[]);
-
-  function startConOld() {
-    const url = "ws://localhost:61613/ws";
-    const client = new Client();
-    const uid = "user1";
-
-    client.configure({
-      "client-id": uid,
-      brokerURL: url,
-      onConnect: () => {
-        console.log('onConnect');
-        // /MOTD/queues/multicast/queue1
-        client.subscription("MOTD", message => {
-          console.log(message);
-          setMsg(message.body);
-        }, {"subscription-type": "multicast"});
-
-      },
-      // Helps during debugging, remove in production
-      debug: (str) => {
-        console.log(new Date(), str);
-      }
-    });
-
-    client.activate();
-
-    setClient(client);
-  }
 
   const uid = "user1";
 
   function connectCallback(client) {
-    console.log("Connected");
-    //,
-    setMotdSub(client.subscribe("MOTD", motdCallback, { "id": `${uid}-motd`, 'durable-subscription-name': `${uid}-motd`}));
+    console.log("Connection success");
+    // once connected start requests
+    client.heartbeatIncoming = 0; // disable "pong"
+    client.reconnectDelay = 300;
+
+    // durable sub to persist queue after disconnect
+    client.subscribe("MOTD", motdCallback, { "id": uid, 'durable-subscription-name': 'motd'});
+
+    setClient(client);
   }
 
   function motdCallback (msg){
     console.log("New MOTD MESSAGE", msg);
     setMsg(msg.body);
-    setLastMsg(msg);
-
-    console.log(client.browse())
   }
 
   function startCon() {
     const url = "ws://localhost:61613";
 
+    // heartbeat every 10s by default, required to keep connection online
     const client = Stomp.client(url);
     client.connect({'client-id': uid, "subscription-type": "multicast"}, ()=>connectCallback(client));
-
-    setClient(client);
   }
 
   function sendMsg() {
     const date = new Date();
-    clientState.send("MOTD", {}, `current minute: ${date.getMinutes()}`);
+    // _AMQ_LVQ_NAME header sets key of last value queue
+    // persistent to make the message durable
+    // problem - being shown as bytes by broker, broker messages are text (type 3)
+
+    let message = {destination: 'MOTD', body: JSON.stringify({test: `current second: ${date.getSeconds()}`}), headers: {persistent:true, priority:0, _AMQ_LVQ_NAME: "motd_latest", _AMQ_CONTENT_TYPE: 3, 'content-type': 'text/plain'}};
+    console.log("Sending:", message);
+    clientState.publish(message);
   }
 
-  function ackMsg() {
-    lastMsg.ack();
+  function endCon(){
+    clientState.deactivate().then(r => console.log("Disconnected"));
   }
 
   return (
     <div className="App">
       <button onClick={startCon}>CONNECT</button><br/>
-      <button onClick={()=>clientState.deactivate()}>DISCONNECT</button><br/>
+      <button onClick={endCon}>DISCONNECT</button><br/>
       <button onClick={sendMsg}>SEND</button><br/>
-      <button onClick={ackMsg}>ACK</button><br/>
       {msg}
     </div>
   );
